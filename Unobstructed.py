@@ -3,6 +3,7 @@ import casadi.casadi as cs
 import matplotlib.pyplot as plt
 import numpy as np
 import tree_gen
+import math
 
 (nu,nx,N,lf,lr,ts) = (2,4,38,1,1,0.1)       #nu = Number of inputs, nx = number of states
 ltot = lf+lr
@@ -10,7 +11,7 @@ ltot = lf+lr
 Rmin = 0.5
 
 (xref, yref, psiref, vref) = (1,1,0,0)   #Target
-(q,qpsi,qbeta,r_v,r_beta,qN,qPsiN,qBetaN) = (10.0, 0.1, 0.1, 1,1, 200, 2,2)
+(q,qpsi,qV,r_v,r_beta,qN,qPsiN,qVN) = (10.0, 0.1, 0.1, 1,1, 200, 2,2)
 
 p = np.array([[0.3,0.15,0.2,0.2,0.15],      #Tranisitional probabilitiy of tree
               [0.2,0.3,0.15,0,0.35],
@@ -29,11 +30,11 @@ z0 = cs.SX.sym('z0', nx)
 
 (x,y,psi,v) = (z0[0], z0[1], z0[2], z0[3])
 
-cost = tree.probability_of_node(0)*(q*((x-xref)**2+(y-yref)**2)+qpsi*(psi-psiref)**2+qbeta*(v-vref)**2)
+cost = tree.probability_of_node(0)*(q*((x-xref)**2+(y-yref)**2)+qpsi*(psi-psiref)**2+qV*(v-vref)**2)
 cost += tree.probability_of_node(0)*(r_v*u[0]**2+r_beta*u[1]**2)
 # cost += tree.probability_of_node(0)*(1*cs.dot(u, u))
 
-z_sequence = [None]*tree.num_nonleaf_nodes
+z_sequence = [None]*tree.num_nodes
 z_sequence[0] = z0
 
 c=0
@@ -54,13 +55,35 @@ for i in range(1,tree.num_nonleaf_nodes):       #Looping through all non-leaf no
     v_current  = v_anc+ts*(u_anc[0])
     psi_current  = psi_anc+ts*(u_anc[0]*cs.sin(u_anc[1]))/lr
 
-    cost += prob_i*(q*((x_current-xref)**2+(y_current-yref)**2)+qpsi*(psi_current-psiref)**2+qbeta*(v_current-vref)**2)
+    cost += prob_i*(q*((x_current-xref)**2+(y_current-yref)**2)+qpsi*(psi_current-psiref)**2+qV*(v_current-vref)**2)
     cost += prob_i*(r_v*u[0]**2+r_beta*u[1]**2)
     # cost += prob_i*(1*cs.dot(u_current, u_current))
 
     z_sequence[i]=cs.vertcat(x_current,y_current,v_current,psi_current)
 
-bounds = og.constraints.BallInf(radius = 1)
+for i in range(tree.num_nonleaf_nodes,tree.num_nodes):       #Looping through all leaf nodes
+    idx_anc = tree.ancestor_of(i) 
+    prob_i = tree.probability_of_node(i)
+
+    x_anc = z_sequence[idx_anc][0]
+    y_anc = z_sequence[idx_anc][1]
+    v_anc = z_sequence[idx_anc][2]
+    psi_anc = z_sequence[idx_anc][3]
+
+    u_anc = u[idx_anc*nu:(idx_anc+1)*nu] 
+
+    x_current  = x_anc+ts*(u_anc[0]*cs.cos(psi_anc+u_anc[1]))
+    y_current  = y_anc+ts*(u_anc[0]*cs.sin(psi_anc+u_anc[1]))
+    v_current  = v_anc+ts*(u_anc[0])
+    psi_current  = psi_anc+ts*(u_anc[0]*cs.sin(u_anc[1]))/lr
+
+    cost += prob_i*(qN*((x_current-xref)**2+(y_current-yref)**2)+qPsiN*(psi_current-psiref)**2+qVN*(v_current-vref)**2)
+    # cost += prob_i*(1*cs.dot(u_current, u_current))
+
+    z_sequence[i]=cs.vertcat(x_current,y_current,v_current,psi_current)
+
+
+bounds = og.constraints.BallInf(radius = 1.2)
 
 for i in range(tree.num_nodes):
     tree.set_data_at_node(i, {"pos": [1,1]})
@@ -111,14 +134,17 @@ time = np.arange(0, ts*N, ts)
 u_star = solution['solution']
 v = u_star[0:nu*N:2]
 delta = u_star[1:nu*N:2]
-print(u_star)
-
+print(delta)
+print("----------------")
+steering = [None]*len(delta)
+for i in range(len(delta)):
+    steering[i]=math.degrees(cs.atan((ltot/lr)*cs.tan(delta[i])))
 
 plt.subplot(2,1,1)
 plt.plot(time, v, '-o')
 plt.ylabel('v  (m/s)')
 plt.subplot(2,1,2)
-plt.plot(time, delta, '-o')
+plt.plot(time, steering, '-o')
 plt.ylabel('delta (rad)')
 plt.xlabel('Time')
 plt.show()
@@ -149,14 +175,24 @@ for t in range(0, N):
 
 xx = x_states[0:nx*N:nx]
 xy = x_states[1:nx*N:nx]
+xv = x_states[2:nx*N:nx]
 xpsi = x_states[3:nx*N:nx]
-xbeta = x_states[4:nx*N:nx]
 
 figure, axes = plt.subplots()
-plt.plot(xx, xy, '-o')
+
+plt.plot(xx[0], xy[0], '-o', color = 'red', markerfacecolor = 'red')
+plt.plot(xx[1:-1], xy[1:-1], '-o', color = 'blue', markerfacecolor = 'blue')
+plt.plot(xx[-1], xy[-1], '-o', color = 'green', markerfacecolor = 'green')
+plt.legend(['Start Point','Path','Finish Point'])
 axes.set_aspect(1)
-plt.xlabel("X Position")
-plt.ylabel("Y Position")
+plt.xlabel("X Position (m)")
+plt.ylabel("Y Position (m)")
+plt.show()
+
+
+
+figure, axes = plt.subplots()
+plt.plot(time,xpsi,"-o")
 plt.show()
 
 print(f"Solution exit status "+str(solution["exit_status"]))
@@ -167,3 +203,4 @@ print(f"Outer iterations "+str(solution["num_outer_iterations"]))
 print(f"f2 norm:" +str(solution["f2_norm"]))
 print(f"Cost "+str(solution["cost"]))
 
+print(xpsi)
